@@ -1,0 +1,6 @@
+streamlit==1.38.0
+pandas==2.2.2
+numpy==1.26.4
+sentence-transformers==3.0.1
+chromadb==0.5.5
+textblob==0.18.0.post0

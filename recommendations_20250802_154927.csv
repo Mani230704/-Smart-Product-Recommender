@@ -1,0 +1,3 @@
+id,name,description,price,category,score,review_count,avg_sentiment
+1,Wireless Headphones Pro,"['Premium', 'wireless', 'headphones', 'with', 'active', 'noise', 'cancellation', 'and', '30-hour', 'battery', 'life.', 'Bluetooth', '5.2,', '40mm', 'drivers,', 'USB-C,']",129.99,Electronics,0.43427642805252376,2,0.5625
+3,4K OLED TV,"['65-inch', '4K', 'OLED', 'TV', 'with', 'HDR10', 'and', 'smart', 'streaming.', '4K', 'UHD,', '120Hz,', 'HDMI', '2.1,', 'Dolby']",799.99,Electronics,0.24890212670947603,2,0.44375
