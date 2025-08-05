@@ -12,7 +12,6 @@ import uuid
 import os
 from nltk.corpus import wordnet
 import nltk
-import asyncio
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
@@ -22,16 +21,20 @@ import re
 # Download NLTK data
 nltk.download('wordnet', quiet=True)
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Set up logging for production
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
+
+# Cache embedding model
+@st.cache_resource
+def load_embedding_model():
+    return embedding_functions.SentenceTransformerEmbeddingFunction(model_name=Config.EMBEDDING_MODEL)
 
 # Configuration class
 class Config:
     EMBEDDING_MODEL = "all-MiniLM-L6-v2"
     VECTOR_DB_NAME = "products"
     TOP_K = 6
-    FPS = 60
     AUTHENTICITY_THRESHOLD = 0.4
     CATEGORY_WEIGHTS = {'Electronics': 1.0, 'Wearables': 0.8, 'Accessories': 0.6}
     ITEMS_PER_PAGE = 3
@@ -206,8 +209,8 @@ class QueryExpander:
 # Vector Database Module
 class VectorDB:
     def __init__(self):
-        self.client = chromadb.PersistentClient(path="./vector_db")
-        self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=Config.EMBEDDING_MODEL)
+        self.client = chromadb.Client()  # In-memory client for Streamlit Community Cloud
+        self.embedding_function = load_embedding_model()
         self.collection = self.client.get_or_create_collection(
             name=Config.VECTOR_DB_NAME,
             embedding_function=self.embedding_function
@@ -569,7 +572,7 @@ class ProductAdder:
             return False
 
 # Streamlit UI
-async def main():
+def main():
     try:
         st.set_page_config(page_title="Smart Product Recommender", layout="wide")
         st.markdown("""
@@ -650,7 +653,7 @@ async def main():
                     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
                 }
                 .stMetric {
-                    background:rgba(255, 255, 255, 0); ;
+                    background: rgba(255, 255, 255, 0); ;
                     border-radius: 12px;
                     padding: 15px;
                     box-shadow: 0 3px 10px rgba(0,0,0,0.1);
@@ -781,18 +784,19 @@ async def main():
             st.session_state.reset_compare = False
 
         # Initialize modules
-        df = DataLoader.load_product_data(st.session_state.data_version)
-        if df.empty:
-            logger.warning("Products DataFrame is empty")
-            st.warning("No products available. Please add products in the 'Add Product' tab.")
-        vector_db = VectorDB()
-        vector_db.add_products(df)
-        recommender = RecommendationEngine(vector_db)
-        comparator = ProductComparator()
-        tracker = UserBehaviorTracker()
-        metrics = EvaluationMetrics()
-        visualizer = Visualizer()
-        product_adder = ProductAdder()
+        with st.spinner("Initializing recommendation engine..."):
+            df = DataLoader.load_product_data(st.session_state.data_version)
+            if df.empty:
+                logger.warning("Products DataFrame is empty")
+                st.warning("No products available. Please add products in the 'Add Product' tab.")
+            vector_db = VectorDB()
+            vector_db.add_products(df)
+            recommender = RecommendationEngine(vector_db)
+            comparator = ProductComparator()
+            tracker = UserBehaviorTracker()
+            metrics = EvaluationMetrics()
+            visualizer = Visualizer()
+            product_adder = ProductAdder()
 
         # Tabs
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["Search & Recommend", "Compare Products", "Add Product", "Favorites", "Performance Metrics"])
@@ -1035,4 +1039,4 @@ async def main():
         logger.error(f"Main loop error: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
