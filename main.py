@@ -590,7 +590,7 @@ def main():
         st.set_page_config(page_title="Smart Product Recommender", layout="wide")
         st.markdown("""
             <style>
-                .main { background: linear-gradient(to bottom, #f6f9fc, #e8ecef); }
+               .main { background: linear-gradient(to bottom, #1e1e1e, #343a40); color: #e9ecef; }
                 .stButton>button { 
                     background: linear-gradient(135deg, #007bff, #00d4ff);
                     color: white; 
@@ -1053,5 +1053,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
