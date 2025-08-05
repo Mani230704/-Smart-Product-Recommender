@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 def load_embedding_model():
     return SentenceTransformer(Config.EMBEDDING_MODEL)
 
+PINECONE_API_KEY = "pcsk_6872y7_Qf4tNLr5T2RYiy8ZiBjTP86rQx6fnwN83udReSZJkpansZpUmkm9bqNBTbw8Mma"
 # Cache Pinecone index
 @st.cache_resource
 def init_pinecone():
@@ -1053,3 +1054,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
