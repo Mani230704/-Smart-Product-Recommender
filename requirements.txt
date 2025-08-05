@@ -2,10 +2,11 @@ streamlit==1.36.0
 pandas==2.2.0
 numpy==1.26.4
 sentence-transformers==2.6.0
-chromadb==0.4.22
+chromadb>=0.4.22
 textblob==0.17.1
 nltk==3.8.1
 plotly==5.15.0
 setuptools==65.5.0
+
 
 
