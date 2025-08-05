@@ -2,8 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from sentence_transformers import SentenceTransformer
-import chromadb
-from chromadb.utils import embedding_functions
+from pinecone import Pinecone, ServerlessSpec
 from textblob import TextBlob
 from typing import List, Dict, Any
 import logging
@@ -28,7 +27,21 @@ logger = logging.getLogger(__name__)
 # Cache embedding model
 @st.cache_resource
 def load_embedding_model():
-    return embedding_functions.SentenceTransformerEmbeddingFunction(model_name=Config.EMBEDDING_MODEL)
+    return SentenceTransformer(Config.EMBEDDING_MODEL)
+
+# Cache Pinecone index
+@st.cache_resource
+def init_pinecone():
+    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+    index_name = Config.VECTOR_DB_NAME
+    if index_name not in pc.list_indexes().names():
+        pc.create_index(
+            name=index_name,
+            dimension=384,  # Dimension of all-MiniLM-L6-v2
+            metric="cosine",
+            spec=ServerlessSpec(cloud="aws", region="us-east-1")
+        )
+    return pc.Index(index_name)
 
 # Configuration class
 class Config:
@@ -209,32 +222,27 @@ class QueryExpander:
 # Vector Database Module
 class VectorDB:
     def __init__(self):
-        self.client = chromadb.Client()  # In-memory client for Streamlit Community Cloud
+        self.index = init_pinecone()
         self.embedding_function = load_embedding_model()
-        self.collection = self.client.get_or_create_collection(
-            name=Config.VECTOR_DB_NAME,
-            embedding_function=self.embedding_function
-        )
 
     def clear_collection(self) -> None:
         """Clear the vector database collection."""
         try:
-            self.client.delete_collection(Config.VECTOR_DB_NAME)
-            self.collection = self.client.get_or_create_collection(
-                name=Config.VECTOR_DB_NAME,
-                embedding_function=self.embedding_function
-            )
-            logger.info("Cleared vector database collection")
+            # Delete all vectors in the index
+            self.index.delete(delete_all=True)
+            logger.info("Cleared Pinecone index")
         except Exception as e:
-            logger.error(f"Error clearing vector database: {e}")
+            logger.error(f"Error clearing Pinecone index: {e}")
 
     def add_products(self, df: pd.DataFrame) -> None:
-        """Process and store product data in vector database."""
+        """Process and store product data in Pinecone."""
+        vectors = []
         for _, row in df.iterrows():
             combined_text = f"{row['name']}: {row['description']} {row['specifications']}"
             filtered_reviews = ReviewAuthenticity.filter_reviews(row['reviews'])
             review_sentiments = [TextBlob(review).sentiment.polarity for review in filtered_reviews]
             avg_sentiment = np.mean(review_sentiments) if review_sentiments else 0
+            embedding = self.embedding_function.encode(combined_text).tolist()
             metadata = {
                 'id': row['id'],
                 'name': row['name'],
@@ -243,12 +251,14 @@ class VectorDB:
                 'avg_sentiment': float(avg_sentiment),
                 'review_count': len(filtered_reviews)
             }
-            self.collection.upsert(
-                documents=[combined_text],
-                metadatas=[metadata],
-                ids=[row['id']]
-            )
-        logger.info("Products successfully added to vector database")
+            vectors.append({
+                'id': row['id'],
+                'values': embedding,
+                'metadata': metadata
+            })
+        if vectors:
+            self.index.upsert(vectors=vectors)
+        logger.info("Products successfully added to Pinecone index")
 
 # Recommendation Engine
 class RecommendationEngine:
@@ -266,29 +276,30 @@ class RecommendationEngine:
         try:
             start_time = time.time()
             expanded_query = self.query_expander.expand_query(query)
-            query_embedding = self.vector_db.embedding_function([expanded_query])[0]
-            where_clause = {
-                "$and": [
-                    {"category": {"$in": preferences}} if preferences else {},
-                    {"price": {"$gte": min_price}},
-                    {"price": {"$lte": max_price}}
-                ]
-            }
-            results = self.vector_db.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k,
-                where=where_clause
+            query_embedding = self.vector_db.embedding_function.encode(expanded_query).tolist()
+            filter_conditions = {}
+            if preferences:
+                filter_conditions['category'] = {'$in': preferences}
+            filter_conditions['price'] = {'$gte': min_price, '$lte': max_price}
+            
+            results = self.vector_db.index.query(
+                vector=query_embedding,
+                top_k=top_k,
+                filter=filter_conditions,
+                include_metadata=True
             )
 
             ranked_results = []
-            for doc, meta, dist in zip(results['documents'][0], results['metadatas'][0], results['distances'][0]):
+            for match in results['matches']:
+                meta = match['metadata']
+                dist = match['score']  # Pinecone uses cosine similarity (higher is better)
                 category_weight = Config.CATEGORY_WEIGHTS.get(meta['category'], 1.0)
                 review_weight = meta['review_count'] / (meta['review_count'] + 2)
-                score = (1 / (1 + dist)) * (1 + meta['avg_sentiment']) * category_weight * review_weight
+                score = dist * (1 + meta['avg_sentiment']) * category_weight * review_weight
                 ranked_results.append({
                     'id': meta['id'],
                     'name': meta['name'],
-                    'description': doc.split(': ')[1].split(' ')[0:-1],
+                    'description': meta.get('description', '').split(' ')[:-1],  # Fallback if description not stored
                     'price': meta['price'],
                     'category': meta['category'],
                     'score': score,
@@ -313,25 +324,27 @@ class RecommendationEngine:
     def get_cross_category_recommendations(self, product_id: str, min_price: float, max_price: float, top_k: int = Config.TOP_K) -> List[Dict[str, Any]]:
         """Generate cross-category recommendations."""
         try:
-            product = self.vector_db.collection.get(ids=[product_id], include=['documents', 'metadatas'])
-            if not product['documents']:
+            product = self.vector_db.index.fetch([product_id])
+            if not product['vectors']:
                 return []
             
-            query = product['documents'][0]
-            results = self.vector_db.collection.query(
-                query_texts=[query],
-                n_results=top_k + 1,
-                where={"$and": [{"price": {"$gte": min_price}}, {"price": {"$lte": max_price}}]}
+            query_embedding = product['vectors'][product_id]['values']
+            results = self.vector_db.index.query(
+                vector=query_embedding,
+                top_k=top_k + 1,
+                filter={"price": {"$gte": min_price, "$lte": max_price}},
+                include_metadata=True
             )
             
             ranked_results = []
-            for doc, meta, dist in zip(results['documents'][0], results['metadatas'][0], results['distances'][0]):
-                if meta['id'] != product_id:
-                    score = 1 / (1 + dist)
+            for match in results['matches']:
+                if match['id'] != product_id:
+                    meta = match['metadata']
+                    score = match['score']
                     ranked_results.append({
                         'id': meta['id'],
                         'name': meta['name'],
-                        'description': doc.split(': ')[1].split(' ')[0:-1],
+                        'description': meta.get('description', '').split(' ')[:-1],
                         'price': meta['price'],
                         'category': meta['category'],
                         'score': score
@@ -560,11 +573,11 @@ class ProductAdder:
             st.session_state.products_df = pd.concat([df, new_df], ignore_index=True, sort=False)
             logger.info(f"Updated products_df with new product: {name}, ID: {new_id}")
 
-            # Clear and rebuild vector database to ensure consistency
+            # Clear and rebuild Pinecone index
             vector_db.clear_collection()
             vector_db.add_products(st.session_state.products_df)
             st.success(f"Product '{name}' added successfully!")
-            logger.info(f"Added product {name} with ID {new_id} to vector database")
+            logger.info(f"Added product {name} with ID {new_id} to Pinecone index")
             return True
         except Exception as e:
             st.error(f"Error adding product: {e}")
