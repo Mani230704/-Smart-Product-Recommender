@@ -7,3 +7,4 @@ textblob==0.17.1
 nltk==3.8.1
 plotly==5.15.0
 setuptools==65.5.0
+
